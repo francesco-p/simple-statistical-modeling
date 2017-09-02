@@ -1,0 +1,598 @@
+---
+title: 'Statistical Inference: Project Report'
+output:
+  pdf_document: default
+  html_notebook: default
+  html_document: default
+---
+```{r setup, include=FALSE}
+library("knitr")
+opts_chunk$set(dev = 'pdf')
+opts_chunk$set(root.dir = '~/resources/rstudio')
+#opts_chunk$set(echo = FALSE)
+```
+
+```{r, include=FALSE}
+
+# Multiple plot function yes very interesting
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+\begin{center}
+\Large{Francesco Pelosin}\\[1pc]
+\large{\today}\\[1pc]
+\large{Dataset: Housing-Market}\\
+\end{center}
+
+# Preprocessing
+
+La prima cosa da fare è uno step di preprocessing dove cerchiamo **valori mancanti**, **modifichiamo colonne** e facciamo tutte quelle operazioni che riguardano i dati puri.
+
+Il dataset è composto come segue:
+
+1. `price`: Prezzo della casa in 100 \$ dollari (**Variabile risposta**)
+2. `dimension`: Dimensione della casa in piedi quadri (**Predittore quantitativo**)
+3. `score`: Valutazione da 0 a 10 data da un esperto del settore (**Predittore categoriale**)
+4. `city.center`: Variabile sì/no, "la casa è in centro città?" (**Predittore categoriale**)
+5. `traditional`: Variabile sì/no, "la casa è stile tradizionale?"  (**Predittore categoriale**)
+6. `garage`: Variabile sì/no, "la casa dispone di un garage?" (**Predittore categoriale**)
+
+La variabile risposta è `price` e tutte le altre variabili sono i predittori. Tra le variabili abbiamo un **unico predittore quantitativo** (`dimension`) mentre `i restanti sono predittori qualitativi`. Vediamo la parte iniziale del dataset:
+
+```{r}
+markets <- read.csv("../data/Housing-Market.csv")
+head(markets)
+```
+
+Cerchiamo nel dataset se ci sono **valori mancanti**:
+
+```{r}
+sapply(markets, function(x) sum(is.na(x)))
+```
+
+Non ci sono valori mancanti da gestire, in quanto nessuna colonna contiene valori `NA`.
+
+\pagebreak
+
+Al fine di **migliorare l'interpretabilità** dell'analisi ho deciso di convertire\footnote{Perderemo il valore senza la virgola, ma non è un gran problema per R} `dimension` da piedi² a metri² e di modificare la variabile `price` da centinaia di dollari in dollari unitari. Questo ci permette di controllare che i risultati che otteniamo abbiano senso.
+
+```{r}
+markets$dimension <- markets$dimension * 0.09290304
+markets$price <- markets$price * 100
+head(markets)
+```
+
+```{r}
+summary(markets)
+```
+
+Un'altra cosa importante da gestire è che la variabile `score` non viene interpretato come un **predittore categoriale**, forziamo quindi R attraverso la funzione `factor`.
+
+```{r}
+markets$score <- factor(markets$score, labels = c("0","1","2","3","4","5","6","7","8"))
+summary(markets)
+```
+
+\pagebreak
+
+# Exploratory Data Analysis
+
+Ora siamo pronti per iniziare la seconda fase (EDA) per estrapolare **informazioni preliminari**, **visualizzare relazioni** tra predittori e la variabile risposta, **identificazione degli outliers** e farci una idea di che tipo di **predittori potremmo includere** nel modello.
+
+La prima cosa che ho notato con il summary è che:
+
+- *Il  numero delle case senza garage è quasi uguale al unmero di case che non sono tradizionali*
+
+````
+        traditional    garage
+        no :130        no :136   
+        yes: 37        yes: 31 
+````
+
+Controlliamo se c'è una qualsiasi relazione tra queste due variabili. Se così fosse vremmo due variabili che portano la **stessa informazione** (eccetto 7 osservazioni) e potremmo rimuoverne una.
+    
+```{r fig.width = 4, fig.height = 3}
+library(ggplot2)
+ggplot(markets, aes(x=traditional, fill=garage))+
+geom_bar()
+
+```
+
+Il grafico dimostra che **non è il caso**, ci sono più case con il garage (plausibile) per entrambi i tipi di casa.
+
+Il prossimo grafico a dispersione (**scatter plot**) riguarda l'unica variabile quantitativa `dimension` in relazione con `price`.
+
+Quello che personalmente mi aspetto è che:
+
+- *Più aumenta la grandezza di una casa, più aumenta il prezzo*
+
+Vediamo difatti la loro **correlazione lineare**:
+
+$$ Cor(\texttt{dimension}, \texttt{price})$$
+
+```{r}
+with(markets, round(cor(price,dimension),2))
+```
+
+Infatti il coefficiente è alto **come ci aspettavamo**. Sicuramente questo predittore potrà essere parte del nostro modello, ora vediamo il grafico:
+
+```{r fig.width = 4, fig.height = 4}
+ggplot(markets, aes(x=dimension, y=price)) + 
+    geom_point(shape=16) + 
+    geom_smooth(method=lm) + # Retta di regressione (default 95% reg. di conf.)
+    ggtitle("Price vs Dimension")+
+    xlab("Dimension in mt²")+
+    ylab("Price in $")
+```
+
+The blue line is a regression line with 95% confidence boundaries. 
+
+Osservazioni:
+
+1. La prima cosa da notare è che ci sono **due outliers**, sono due case con dimensione maggiore di 300 mt²
+
+2. La relazione con il prezzo **non sembra totalmente lineare** forse un termine quadratico potrebbe modellare meglio l'approssimazone.
+
+Identifichiamo gli outliers e salviamoli in `markets.outliers`.
+
+```{r}
+subset(markets, dimension > 300)
+markets.outliers <- which(markets$dimension > 300)
+```
+
+Prima di decidere cosa fare, vediamo altri grafici delle restanti variabili.
+
+Ora abbiamo solo **predditori categoriali**, in questo caso *non si puo calcolare la correlazione* per tanto utilizzeremo dei **box plots** per analizzare i dati. 
+
+\pagebreak
+
+Quello che personalmente mi aspetto è:
+
+- *`garage` credo influirà molto nel prezzo della casa (anche se in parte l'informazione potrebbe essere nella variabile dimensione)*
+
+- *`city.center` credo influirà molto nel prezzo della casa*
+
+- *`traditional` non credo influirà più di tanto nella variabile risposta*
+
+- *`score` non credo influirà più di tanto in quanto l'esperto potrebbe essere "biased" e dare giudizi non oggettivi in quanto influenzato dalla suoi gusti ed esperienze personali.*
+    
+```{r fig.width = 8, fig.height = 7}
+p1 <- ggplot(markets, aes(x=score, y=price, fill=score)) + 
+    geom_boxplot() + 
+    geom_jitter(shape=1, position=position_jitter(0.3), color="#777777")+
+    theme(legend.position="none")+
+    ggtitle("Price vs Score")+
+    xlab("Score levels")+
+    ylab("Price in $")
+
+p2 <- ggplot(markets, aes(x=city.center, y=price, fill=city.center)) + 
+    geom_boxplot() + 
+    geom_jitter(shape=1, position=position_jitter(0.3), color="#777777")+
+    theme(legend.position="none")+
+    ggtitle("Price vs City Center")+
+    xlab("City Center")+
+    ylab("Price in $")
+
+p3 <- ggplot(markets, aes(x=traditional, y=price, fill=traditional)) + 
+    geom_boxplot() + 
+    geom_jitter(shape=1, position=position_jitter(0.3), color="#777777")+
+    theme(legend.position="none")+
+    ggtitle("Price vs Traditional")+
+    xlab("Traditional")+
+    ylab("Price in $")
+
+
+p4 <- ggplot(markets, aes(x=garage, y=price, fill=garage)) + 
+    geom_boxplot() + 
+    geom_jitter(shape=1, position=position_jitter(0.3), color="#777777")+
+    theme(legend.position="none")+
+    ggtitle("Price vs Garage")+
+    xlab("Garage")+
+    ylab("Price in $")
+
+multiplot(p1, p2, p3, p4, cols=2)
+```
+
+\begin{enumerate}
+\item Osservazioni per \texttt{score}:
+
+  \begin{itemize}
+  \item Come lo score cresce, la variabilità cresce significativamente
+  \item Ci sono parecchie case che hanno lo stesso score
+  \item Sembra esserci una sorta di relazione tra lo score ed il prezzo, ma non è molto chiara
+  \end{itemize}
+
+\item Osservazioni per \texttt{city.center}:
+  
+  \begin{itemize}
+  \item Le case che non sono in centro città costano un po' di meno
+  \item In centro città ci sono più case, molte costano poco (probabilmente sono appartamenti condominiali)
+  \end{itemize}
+  
+\item Osservazioni per \texttt{traditional}:
+  \begin{itemize}
+  \item Le case moderne tendono a costare di più rispetto alle tradizionali
+  \item Le case non tradizionali hanno prezzi molto più variabili
+  \end{itemize}
+
+\item Osservazioni per \texttt{garage}:
+  \begin{itemize}
+  \item Non vi sono particolari informazioni 
+  \end{itemize}
+\end{enumerate}
+Proviamo ora a comparare il predittore dimensione con i predittori categoriali.
+
+```{r fig.width = 12, fig.height = 6}
+p1 <- ggplot(markets, aes(x=dimension, y=price,color=garage)) +
+    geom_point(shape=16) +    
+    #geom_smooth(method=lm) +
+     facet_wrap(~garage)+  
+    ggtitle("Price vs Dimension ~ Garage")+
+    xlab("Dimension in mt²")+
+    ylab("Price in $")
+   
+p2 <-ggplot(markets, aes(x=dimension, y=price,color=city.center)) +
+    geom_point(shape=16) +    
+    #geom_smooth(method=lm)    + 
+facet_wrap(~city.center)+ 
+    ggtitle("Price vs Dimension ~ City Center")+
+    xlab("Dimension in mt²")+
+    ylab("Price in $")
+   
+                   
+p3 <-ggplot(markets, aes(x=dimension, y=price, color=traditional)) +
+    geom_point(shape=16) +    
+    #geom_smooth(method=lm)  + 
+    facet_wrap(~traditional)+ 
+    ggtitle("Price vs Dimension ~ Traditional")+
+    xlab("Dimension in mt²")+
+    ylab("Price in $")
+
+multiplot(p1, p2, p3, cols=2)                          
+```
+
+\pagebreak
+
+```{r fig.width = 6, fig.height =5}
+ggplot(markets,aes(x=dimension, y=price, color=score)) + 
+    coord_cartesian( xlim = c(65, 350), ylim = c(54000, 216900))+
+    geom_point(shape=16)  +       
+    facet_wrap(~score)+    
+    ggtitle("Price vs Dimension ~ Score")+
+    xlab("Dimension in mt²")+
+    ylab("Price in $")
+```
+
+Nulla di estremamente informativo in questi grafici, l'unica cosa che si nota è che gli outliers pesano molto nei vari pattern.
+
+\pagebreak
+
+# Creazione modello
+
+In questa parte si proverà a creare il nostro modello statistico che cercherà di **descrivere il fenomeno** catturato nel dataset. Inizierò con un modello semplice fino ad arrivare a quello scelto. 
+
+### Modello Lineare con Outliers
+
+$$Y= \beta_0 + \beta_1 X_1$$
+
+Dove:
+
+- $Y$ corrisponde a `price`
+- $X_1$ corrisponde a `dimension`
+
+```{r}
+mod_a <- lm(price ~ dimension, data=markets)
+summary(mod_a)
+```
+```{r fig.width = 10, fig.height =5}
+library(car)
+residualPlots(mod_a,test=FALSE)
+```
+```{r fig.width = 8, fig.height =4, message=FALSE, warning=FALSE}
+split.screen(c(1, 2))
+
+screen(1)
+qqPlot(rstandard(mod_a), xlab = "Normal quantiles", ylab = "Residual quantiles")
+
+screen(2)
+plot(residuals(mod_a),xlab = "Data Index", ylab = "Residuals")
+```
+
+Il modello è molto semplice e facile da **interpretare**, il prezzo base di una casa è 19012\$ ed ad ogni metro² il prezzo sale di 589\$, il tutto sembra seguire un filo logico ragionevole. Il modello con i coefficienti sarà:
+
+$$\texttt{price} = 19012 + 589*\texttt{dimension}$$
+
+Ci sono comunque dei **problemi evidenti**:
+
+- Gli outliers hanno un forte impatto nel modello piegano difatti la retta al contrario rispetto al pattern dei dati, una conseguenza è l'$R^2_{adj}$ basso. Bisognerà intervenire togliendo le anomalie, rimuovendo così rumore non informativo. 
+- Nel grafico residui vs dimensione possiamo notare che non vi è una relazione lineare (come intuito nella fase di EDA).
+- Il `qqplot` sottolinea la non normalità degli errori.
+- Sembra esserci omoschedasticità, anche se vi è  un po' di variabilità
+
+Proviamo a sistemare i primi due problemi.
+
+## Modello Quadratico senza Outliers
+
+
+$$Y= \beta_0 + \beta_1 X^2_1$$
+
+Dove:
+
+- $Y$ corrisponde a `price`
+- $X_1$ corrisponde a `dimension`
+
+```{r}
+mod_b <- lm(price ~ I(dimension^2) , data=markets, subset=-markets.outliers)
+summary(mod_b)
+```
+
+```{r fig.width = 10, fig.height =5}
+residualPlots(mod_b,test=FALSE)
+```
+```{r fig.width = 8, fig.height =4, message=FALSE, warning=FALSE}
+split.screen(c(1, 2))
+
+screen(1)
+qqPlot(rstandard(mod_b), xlab = "Normal quantiles", ylab = "Residual quantiles")
+
+screen(2)
+plot(residuals(mod_b),xlab = "Data Index", ylab = "Residuals")
+```
+
+Ora l'interpretazione del modello è complessa dal momento che abbiamo introdotto il termine quadratico.
+
+$$\texttt{price} = 5743 + 2.089*\texttt{dimension}^2$$
+Come possiamo vedere i **risultati sono migliori** anche se non possiamo comunque paragonare $R^2$ or $R^2_{adj}$ con il modello precedente in quanto abbiamo un diverso numero di osservazioni. 
+
+I grafici dei residui sembrano essere soddisfacenti con queste due modifiche ad anche il `qqplot` è migliorato di parecchio, tuttavia abbiamo ancora la violazione dell'assunzione di normalità degli errori in quanto abbiamo **11 osservazioni fuori dagli intervalli**. Siccome siamo propensi ad accettare fino al 5% delle osservazioni fuori dai limiti avendo 165 osservazioni (abbiamo tolto gli outliers) il limite massimo sono 8 punti.  
+
+Anche questo modello non è corretto pertanto non è credibile.
+
+
+## Modelli candidati
+
+### Modello 1
+
+$$Y= \beta_0 + \beta_1 X^2_1 + \beta_2 X_2$$
+
+Dove:
+
+- $Y$ corrisponde a `price` 
+- $X_1$ corrisponde a `dimension`.
+- $X_2$ corrisponde a `traditional`.
+
+Introdurremo `traditional` in quanto nella fase di EDA risultava influire maggiormente nel prezzo.
+
+```{r}
+mod1 <- lm(price ~ I(dimension^2) + traditional  , data=markets, subset=-markets.outliers)
+summary(mod1)
+```
+
+```{r fig.width = 8, fig.height =7}
+residualPlots(mod1,test=FALSE)
+```
+```{r fig.width = 8, fig.height =4, message=FALSE, warning=FALSE}
+split.screen(c(1, 2))
+
+screen(1)
+qqPlot(rstandard(mod1), xlab = "Normal quantiles", ylab = "Residual quantiles")
+
+screen(2)
+plot(residuals(mod1),xlab = "Data Index", ylab = "Residuals")
+```
+
+Ora è ancora più complesso interpretare il modello dal momento che abbiamo introdotto un **predittore categoriale**. Il modello si divide in due sottomodelli:
+
+Se la casa è tradizionale:
+
+$$ \texttt{price} = (5848+ 1.366) + 1.916*\texttt{dimension}^2 $$
+
+altrimenti:
+
+$$ \texttt{price} = 5848 + 1.916*\texttt{dimension}^2 $$
+I grafici dei residui sembrano essere soddisfacenti quindi abbiamo l'assunzione dell'indipensenza, il `qqplot` ora evidenzia 8 osservazioni fuori, siamo ai limiti della normalità degli errori.
+
+
+\pagebreak
+
+### Modello 2
+
+$$Y= \beta_0 + \beta_1 X^2_1 + \beta_2 X_2X_3$$
+
+Where:
+
+- $Y$ is `price` 
+- $X_1$ is `dimension`.
+- $X_2$ is `traditional`.
+- $X_3$ is `garage`.
+
+```{r}
+mod2 <- lm(price ~ I(dimension^2) + traditional*garage  , data=markets, subset=-markets.outliers)
+summary(mod2)
+```
+```{r fig.width = 8, fig.height =7}
+residualPlots(mod2,test=FALSE)
+```
+
+\pagebreak
+
+```{r fig.width = 8, fig.height=4, message=FALSE, warning=FALSE}
+split.screen(c(1, 2))
+
+screen(1)
+qqPlot(rstandard(mod2), xlab = "Normal quantiles", ylab = "Residual quantiles")
+
+screen(2)
+plot(residuals(mod2),xlab = "Data Index", ylab = "Residuals")
+
+```
+
+Questo modello definitivamente rispetta la **normalità degli errori**, **omoschedasticità** ed **indipendenza** degli errori ed errori-predittori. Le statistiche annesse sembrano essere soddisfacenti e grazie al rispetto delle assunzioni sono credibili. 
+
+Tuttavia durante la ricerca dei modelli candidati, sono stati trovati altri modelli con $R^2$ più alti, per esempio:
+
+```{r eval=FALSE}
+model <- lm(price ~ dimension*garage*traditional*city.center*score , data=markets.nout)
+```
+
+Il problema con questo modello è che è troppo complesso ed è preferibile scegliere un modello più semplice rispetto ad uno troppo complicato.
+
+\pagebreak
+
+# Validazione
+
+In questo step valideremo il modello creato, facendo delle **previsioni** di prezzi di case. In questo modo potremmo capire quanto sia efficace il nostro modello. La tecnica utilizzata per validare il modello è la tecnica di **10 fold cross validation**. 
+
+Per prima cosa **randomizzo i dati** in modo da rimuovere qualsiasi ordine dei dati, questo serve ad uniformare il più possibile le istanze di training.
+
+```{r}
+# Randomizziamo i dati
+
+markets.nout <- markets[-markets.outliers,]
+
+markets.nout<-markets.nout[sample(nrow(markets.nout)),]
+```
+
+Creiamo ora le 10 partizioni ed addestriamo `mod2`.
+
+```{r}
+all_errors <- c()
+all_sderrors <- c()
+all_rsq <- c()
+
+
+# Creazione dei training-test sets
+folds <- cut(seq(1,nrow(markets.nout)),breaks=10,labels=FALSE)
+
+for(i in 1:10){
+    
+    # Segmentazione dataset
+    testIndexes <- which(folds==i,arr.ind=TRUE)
+    testData <- markets.nout[testIndexes, ]
+    trainData <- markets.nout[-testIndexes, ]
+    
+    # Modello
+    mod2 <- lm(price ~ I(dimension^2) + garage*traditional , data=trainData)
+    rsq <- summary(mod2)$adj.r.square
+    
+    # Previsioni
+    pred <- predict(mod2, newdata=testData)
+    error <- pred-testData$price
+    
+    # Debug
+    cat(sprintf("\n--------------------- Modello %d -----------------------\n", i))
+    cat(sprintf("R^2 in Training: %.3f \n",rsq))
+    cat(sprintf("Errore medio in Test: %.3f \n", mean(error)))
+    cat(sprintf("Dev. Std. errori in Test: %.3f \n", sd(error)))
+    
+    
+    # Statistiche totali
+    all_errors <- c(all_errors, error)
+    all_sderrors <- c(all_sderrors, sd(error))
+    all_rsq <- c(all_rsq, rsq)
+    
+}
+```
+
+\pagebreak
+
+```{r}
+# ggplot richiede un data frame
+flds <- factor(folds, labels=c("1","2","3","4","5","6","7","8","9","10"))
+aux <- data.frame(all_errors, flds )
+
+ggplot(aux, aes(x= flds, y=all_errors, fill=flds))+
+  geom_boxplot()+
+  geom_jitter(shape=1, position=position_jitter(0.1), color="#777777")+
+  theme(legend.position="none")+
+  ggtitle("Test Performances")+
+  xlab("Fold")+
+  ylab("Errors")
+```
+
+
+```{r, echo=FALSE}
+cat(sprintf("\n-.-.-.-.-.-.-.- Statistiche Totali -.-.-.-.-.-.-.-.-.-.-\n"))
+cat(sprintf("Media r_quadro aggiustato per ogni modello: %.3f \n", mean(all_rsq)))
+cat(sprintf("Media errori per ogni modello: %.3f \n", mean(all_errors)))
+cat(sprintf("Media deviazioni standard per ogni modello: %.3f \n", mean(all_sderrors)))
+```
+
+
+
+
+
+\pagebreak
+
+## Conclusione
+
+Il modello proposto **non è molto robusto**, in particolare non credo possa fornire previsioni precise e veramente credibili nei casi reali, ma rimane comunque un buon strumento per avere una idea del fenomeno.
+
+Riassumendo:
+
+
+\begin{enumerate}
+\item Preprocessing
+  \begin{itemize}
+  \item Rilevamento valori mandcanti
+  \item Trasformazione delle variabili
+  \end{itemize}
+  
+\item Exploratory Data Analysis
+  \begin{itemize}
+  \item Visualizzazione delle relazioni
+  \item Rilevamento outliers
+  \end{itemize}
+  
+\item Costruzione Modello
+  \begin{itemize}
+  \item Definizione
+  \item Analisi del modello
+  \item Assunzioni del modello
+  \end{itemize}
+  
+\item Valutazione del modello
+\end{enumerate}
